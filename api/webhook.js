@@ -1,5 +1,4 @@
 const https = require("https");
-const querystring = require("querystring");
 
 const SLACK_TOKEN = process.env.SLACK_TOKEN;
 const SLACK_CHANNEL = "C05GABK0QTU";
@@ -26,12 +25,29 @@ function hasRib(all) {
   return vals.some((v) => v && v.toString().trim() !== "" && v !== "[]");
 }
 
+// Parse multipart/form-data
+function parseMultipart(body, boundary) {
+  const result = {};
+  const parts = body.split("--" + boundary);
+  for (const part of parts) {
+    if (!part || part === "--\r\n" || part.trim() === "--") continue;
+    const match = part.match(/Content-Disposition: form-data; name="([^"]+)"[\r\n]+([\s\S]*)/);
+    if (match) {
+      const key = match[1];
+      const value = match[2].replace(/\r\n$/, "").trim();
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 function buildMessage(all, formId) {
   const formLabel = FORM_LABELS[formId] || "Contrat";
 
   let societe = "";
   for (const key of Object.keys(all)) {
-    if (key.toLowerCase().includes("soussign") || key.toLowerCase().includes("societe") || key.toLowerCase().includes("société")) {
+    const kl = key.toLowerCase();
+    if (kl.includes("soussign") || kl.includes("societe") || kl.includes("société")) {
       societe = all[key];
       break;
     }
@@ -39,13 +55,11 @@ function buildMessage(all, formId) {
 
   let emailResp = "";
   for (const key of Object.keys(all)) {
-    if (key.toLowerCase().includes("responsable") || key.toLowerCase().includes("emailresponsable")) {
+    const kl = key.toLowerCase();
+    if (kl.includes("responsable") || kl.includes("emailresponsable")) {
       emailResp = all[key];
       break;
     }
-  }
-  if (!emailResp) {
-    emailResp = all["q12_emailResponsable"] || all["q13_emailResponsable"] || all["emailResponsable"] || "";
   }
 
   const prenom = extractPrenom(emailResp);
@@ -89,22 +103,32 @@ module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(405).send("Method not allowed");
 
   try {
-    const body = await new Promise((resolve) => {
+    const rawBody = await new Promise((resolve) => {
       let data = "";
       req.on("data", (chunk) => (data += chunk));
       req.on("end", () => resolve(data));
     });
 
-    const fields = querystring.parse(body);
-    let answers = {};
-    if (fields.rawRequest) {
-      try { answers = JSON.parse(fields.rawRequest); } catch {}
+    const contentType = req.headers["content-type"] || "";
+    let all = {};
+
+    if (contentType.includes("multipart/form-data")) {
+      const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
+      if (boundaryMatch) {
+        all = parseMultipart(rawBody, boundaryMatch[1]);
+      }
+    } else {
+      const qs = require("querystring");
+      all = qs.parse(rawBody);
+      if (all.rawRequest) {
+        try { Object.assign(all, JSON.parse(all.rawRequest)); } catch {}
+      }
     }
-    const all = { ...fields, ...answers };
 
     console.log("Clés reçues:", Object.keys(all).join(", "));
+    console.log("Email responsable:", all["q10_emailResponsable"] || all["emailResponsable"] || "non trouvé");
 
-    const formId = (fields.formID || fields.form_id || "").toString();
+    const formId = (all.formID || all.form_id || "").toString();
     const text = buildMessage(all, formId);
 
     await sendSlack(text);
