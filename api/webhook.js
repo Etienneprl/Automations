@@ -20,57 +20,65 @@ function extractPrenom(email) {
   return local.charAt(0).toUpperCase() + local.slice(1).toLowerCase();
 }
 
-function hasRib(all) {
-  const vals = [all["q3_ajoutDu"], all["q4_transfertRib"], all["ajoutDu"], all["transfertRib"]];
-  return vals.some((v) => v && v.toString().trim() !== "" && v !== "[]");
+function hasRib(answers) {
+  return Object.entries(answers).some(([k, v]) => {
+    const kl = k.toLowerCase();
+    if (!kl.includes("rib") && !kl.includes("transfert")) return false;
+    const val = typeof v === "object" ? JSON.stringify(v) : String(v);
+    return val.trim() !== "" && val !== "[]" && val !== "{}";
+  });
 }
 
-// Parse multipart/form-data
+function findEmail(answers) {
+  for (const [k, v] of Object.entries(answers)) {
+    const kl = k.toLowerCase();
+    if (kl.includes("responsable") || kl.includes("emailresponsable")) {
+      return typeof v === "object" ? (v.email || "") : String(v);
+    }
+  }
+  return "";
+}
+
+function findSociete(answers) {
+  for (const [k, v] of Object.entries(answers)) {
+    const kl = k.toLowerCase();
+    if (kl.includes("soussign") || kl.includes("societe") || kl.includes("société")) {
+      if (typeof v === "object") {
+        return Object.values(v).filter(Boolean).join(" ").trim();
+      }
+      return String(v).trim();
+    }
+  }
+  return "";
+}
+
 function parseMultipart(body, boundary) {
   const result = {};
   const parts = body.split("--" + boundary);
   for (const part of parts) {
-    if (!part || part === "--\r\n" || part.trim() === "--") continue;
+    if (!part || part.trim() === "--") continue;
     const match = part.match(/Content-Disposition: form-data; name="([^"]+)"[\r\n]+([\s\S]*)/);
     if (match) {
-      const key = match[1];
-      const value = match[2].replace(/\r\n$/, "").trim();
-      result[key] = value;
+      result[match[1]] = match[2].replace(/\r\n$/, "").trim();
     }
   }
   return result;
 }
 
-function buildMessage(all, formId) {
+function buildMessage(answers, formId) {
   const formLabel = FORM_LABELS[formId] || "Contrat";
-
-  let societe = "";
-  for (const key of Object.keys(all)) {
-    const kl = key.toLowerCase();
-    if (kl.includes("soussign") || kl.includes("societe") || kl.includes("société")) {
-      societe = all[key];
-      break;
-    }
-  }
-
-  let emailResp = "";
-  for (const key of Object.keys(all)) {
-    const kl = key.toLowerCase();
-    if (kl.includes("responsable") || kl.includes("emailresponsable")) {
-      emailResp = all[key];
-      break;
-    }
-  }
-
+  const societe = findSociete(answers);
+  const emailResp = findEmail(answers);
   const prenom = extractPrenom(emailResp);
-  const ribOk = hasRib(all);
+  const ribOk = hasRib(answers);
+
+  console.log("societe:", societe, "| email:", emailResp, "| rib:", ribOk);
 
   const ribLine = ribOk
     ? "✅ RIB ajouté dans Jotform par le client"
     : "⚠️ RIB non ajouté par le client dans Jotform";
 
-  const nomClient = societe ? `*${societe.trim()}*\n_${formLabel}_` : `_${formLabel}_`;
-
+  const nomClient = societe ? `*${societe}*\n_${formLabel}_` : `_${formLabel}_`;
   return `Nouveau contrat signé par ${prenom} ⛵\n${nomClient}\n\n${ribLine}`;
 }
 
@@ -110,26 +118,25 @@ module.exports = async (req, res) => {
     });
 
     const contentType = req.headers["content-type"] || "";
-    let all = {};
+    let fields = {};
 
     if (contentType.includes("multipart/form-data")) {
       const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
-      if (boundaryMatch) {
-        all = parseMultipart(rawBody, boundaryMatch[1]);
-      }
+      if (boundaryMatch) fields = parseMultipart(rawBody, boundaryMatch[1]);
     } else {
-      const qs = require("querystring");
-      all = qs.parse(rawBody);
-      if (all.rawRequest) {
-        try { Object.assign(all, JSON.parse(all.rawRequest)); } catch {}
-      }
+      fields = require("querystring").parse(rawBody);
     }
 
-    console.log("Clés reçues:", Object.keys(all).join(", "));
-    console.log("Email responsable:", all["q10_emailResponsable"] || all["emailResponsable"] || "non trouvé");
+    // Les vraies réponses sont dans rawRequest (JSON)
+    let answers = {};
+    if (fields.rawRequest) {
+      try { answers = JSON.parse(fields.rawRequest); } catch {}
+    }
 
-    const formId = (all.formID || all.form_id || "").toString();
-    const text = buildMessage(all, formId);
+    console.log("Clés answers:", Object.keys(answers).join(", "));
+
+    const formId = (fields.formID || fields.form_id || "").toString();
+    const text = buildMessage(answers, formId);
 
     await sendSlack(text);
     return res.status(200).send("ok");
