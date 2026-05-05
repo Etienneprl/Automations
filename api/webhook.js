@@ -20,20 +20,37 @@ function extractPrenom(email) {
   return local.charAt(0).toUpperCase() + local.slice(1).toLowerCase();
 }
 
-function hasRib(answers) {
-  return Object.entries(answers).some(([k, v]) => {
-    const kl = k.toLowerCase();
-    if (!kl.includes("rib") && !kl.includes("transfert")) return false;
-    const val = typeof v === "object" ? JSON.stringify(v) : String(v);
-    return val.trim() !== "" && val !== "[]" && val !== "{}";
-  });
-}
-
 function extractValue(v) {
   if (!v) return "";
   if (typeof v === "string") return v.trim();
-  if (typeof v === "object") return Object.values(v).filter(Boolean).join(" ").trim();
+  if (typeof v === "object") return Object.values(v).filter(x => x && String(x).trim()).join(" ").trim();
   return String(v).trim();
+}
+
+function findSociete(answers) {
+  // q27_input27 est un objet avec sous-champs : 2 = Nom de la société
+  const bloc = answers["q27_input27"];
+  if (bloc && typeof bloc === "object") {
+    const nom = bloc["2"] || bloc["first"] || "";
+    if (nom) return String(nom).trim();
+    // Fallback : prend la première valeur non vide courte
+    for (const v of Object.values(bloc)) {
+      const s = String(v || "").trim();
+      if (s && s.length < 100) return s;
+    }
+  }
+  return extractValue(bloc);
+}
+
+function hasRib(answers) {
+  // Nom unique : ajoutDu4 → clé dans rawRequest : q3_ajoutDu4
+  for (const [k, v] of Object.entries(answers)) {
+    const kl = k.toLowerCase();
+    if (!kl.includes("ajout") && !kl.includes("rib") && !kl.includes("transfert")) continue;
+    const val = typeof v === "object" ? JSON.stringify(v) : String(v || "");
+    if (val.trim() && val !== "[]" && val !== "{}" && val !== "null") return true;
+  }
+  return false;
 }
 
 function parseMultipart(body, boundary) {
@@ -49,10 +66,13 @@ function parseMultipart(body, boundary) {
 
 function buildMessage(answers, formId) {
   const formLabel = FORM_LABELS[formId] || "Contrat";
-  const societe = extractValue(answers["q57_responsableRegata"]);
+  const societe = findSociete(answers);
   const emailResp = extractValue(answers["q60_emailResponsable"]);
   const prenom = extractPrenom(emailResp);
   const ribOk = hasRib(answers);
+
+  console.log("societe:", societe, "| email:", emailResp, "| rib:", ribOk);
+  console.log("q27_input27:", JSON.stringify(answers["q27_input27"]));
 
   const ribLine = ribOk
     ? "✅ RIB ajouté dans Jotform par le client"
