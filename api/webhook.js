@@ -30,9 +30,12 @@ function hasRib(answers) {
 }
 
 function findEmail(answers) {
+  // Clé exacte identifiée dans les logs
+  if (answers["q60_emailResponsable"]) return String(answers["q60_emailResponsable"]);
+  // Fallback générique
   for (const [k, v] of Object.entries(answers)) {
     const kl = k.toLowerCase();
-    if (kl.includes("responsable") || kl.includes("emailresponsable")) {
+    if (kl.includes("emailresponsable") || kl.includes("email_responsable")) {
       return typeof v === "object" ? (v.email || "") : String(v);
     }
   }
@@ -40,13 +43,21 @@ function findEmail(answers) {
 }
 
 function findSociete(answers) {
+  // Cherche dans tous les champs le nom de la société/dirigeant
+  // Les champs "entre les soussignées" contiennent les infos client
   for (const [k, v] of Object.entries(answers)) {
     const kl = k.toLowerCase();
-    if (kl.includes("soussign") || kl.includes("societe") || kl.includes("société")) {
-      if (typeof v === "object") {
-        return Object.values(v).filter(Boolean).join(" ").trim();
-      }
-      return String(v).trim();
+    if (kl.includes("soussign") || kl.includes("entrepris") || kl.includes("denomination") || kl.includes("raison")) {
+      const val = typeof v === "object" ? Object.values(v).filter(Boolean).join(" ") : String(v);
+      if (val.trim()) return val.trim();
+    }
+  }
+  // Fallback : q27_input27 ou champs similaires contenant le nom société
+  for (const [k, v] of Object.entries(answers)) {
+    const kl = k.toLowerCase();
+    if (kl.includes("input") || kl.includes("societe") || kl.includes("société")) {
+      const val = typeof v === "object" ? Object.values(v).filter(Boolean).join(" ") : String(v);
+      if (val.trim() && val.trim().length > 2) return val.trim();
     }
   }
   return "";
@@ -127,13 +138,13 @@ module.exports = async (req, res) => {
       fields = require("querystring").parse(rawBody);
     }
 
-    // Les vraies réponses sont dans rawRequest (JSON)
     let answers = {};
     if (fields.rawRequest) {
       try { answers = JSON.parse(fields.rawRequest); } catch {}
     }
 
-    console.log("Clés answers:", Object.keys(answers).join(", "));
+    console.log("Toutes les clés:", Object.keys(answers).join(", "));
+    console.log("q60:", answers["q60_emailResponsable"], "| q57:", answers["q57_responsableRegata"]);
 
     const formId = (fields.formID || fields.form_id || "").toString();
     const text = buildMessage(answers, formId);
